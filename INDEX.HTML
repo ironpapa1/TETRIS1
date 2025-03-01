@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>Simple Tetris</title>
+  <style>
+    body {
+      background: #000;
+      color: #fff;
+      text-align: center;
+      margin: 0;
+      padding: 0;
+      font-family: sans-serif;
+    }
+    #gameCanvas {
+      background: #111;
+      display: block;
+      margin: 20px auto;
+      border: 1px solid #555;
+    }
+  </style>
+</head>
+<body>
+  <h1>HTML Tetris Example</h1>
+  <canvas id="gameCanvas" width="240" height="480"></canvas>
+  <script>
+    // === 전역 변수 설정 ===
+    const canvas = document.getElementById('gameCanvas');
+    const context = canvas.getContext('2d');
+
+    // 블록 크기 (픽셀), 보드 크기
+    const COLS = 10;
+    const ROWS = 20;
+    const BLOCK_SIZE = 24; // canvas에 맞춰 24 * 20 = 480, 24 * 10 = 240
+
+    // 그리드(보드) 초기화: 2차원 배열(행: 20, 열: 10)
+    const arena = createMatrix(COLS, ROWS);
+
+    // 플레이어 정보: 현재 떨어지는 블록, 위치 등
+    const player = {
+      pos: {x: 0, y: 0},
+      matrix: null,  // 현재 조작 중인 테트리미노
+    };
+
+    // 시간 제어용 변수 (블록 자동 낙하)
+    let dropCounter = 0;
+    let dropInterval = 1000; // 1초 간격으로 한 칸씩 자동 낙하
+    let lastTime = 0;
+
+    // 테트리미노 모양 정의 (각각 색상 인덱스 부여)
+    // matrix[0][0] = 0 이면 공백, 1~7이면 특정 블록
+    const TETROMINOES = [
+      // I
+      [[0,0,0,0],
+       [1,1,1,1],
+       [0,0,0,0],
+       [0,0,0,0]],
+      // O
+      [[2,2],
+       [2,2]],
+      // T
+      [[0,3,0],
+       [3,3,3],
+       [0,0,0]],
+      // S
+      [[0,4,4],
+       [4,4,0],
+       [0,0,0]],
+      // Z
+      [[5,5,0],
+       [0,5,5],
+       [0,0,0]],
+      // J
+      [[6,0,0],
+       [6,6,6],
+       [0,0,0]],
+      // L
+      [[0,0,7],
+       [7,7,7],
+       [0,0,0]],
+    ];
+
+    // 색상 팔레트 (index 0은 비어있는 칸이므로 사용 안 함)
+    const colors = [
+      '#000000',
+      '#FF0000',
+      '#00FF00',
+      '#0000FF',
+      '#FFFF00',
+      '#00FFFF',
+      '#FF00FF',
+      '#FFA500',
+    ];
+
+    // === 함수 정의 ===
+
+    // 주어진 (w x h) 크기의 2D 배열 생성 (0으로 채움)
+    function createMatrix(width, height) {
+      const matrix = [];
+      for (let y = 0; y < height; y++) {
+        matrix.push(new Array(width).fill(0));
+      }
+      return matrix;
+    }
+
+    // 블록(테트리미노)을 arena(보드)에 합친다 (도장 찍기)
+    function merge(arena, player) {
+      const m = player.matrix;
+      for (let y = 0; y < m.length; y++) {
+        for (let x = 0; x < m[y].length; x++) {
+          if (m[y][x] !== 0) {
+            arena[player.pos.y + y][player.pos.x + x] = m[y][x];
+          }
+        }
+      }
+    }
+
+    // 충돌 판정: arena 내부 또는 이미 놓인 블록과 겹치면 충돌
+    function collide(arena, player) {
+      const m = player.matrix;
+      for (let y = 0; y < m.length; y++) {
+        for (let x = 0; x < m[y].length; x++) {
+          if (m[y][x] !== 0) {
+            const boardY = player.pos.y + y;
+            const boardX = player.pos.x + x;
+            // 보드 범위 밖이거나, 이미 블록이 놓여있다면 충돌
+            if (boardY < 0 || 
+                boardY >= arena.length || 
+                boardX < 0 || 
+                boardX >= arena[0].length ||
+                arena[boardY][boardX] !== 0) {
+              return true;
+            }
+          }
+        }
+      }
+      return false;
+    }
+
+    // 한 줄이 가득 찬 경우 지우기
+    function arenaSweep() {
+      let rowCount = 0;
+      for (let y = arena.length - 1; y >= 0; ) {
+        if (arena[y].every(cell => cell !== 0)) {
+          arena.splice(y, 1);
+          arena.unshift(new Array(COLS).fill(0));
+          rowCount++;
+        } else {
+          y--;
+        }
+      }
+      // (rowCount 만큼 점수를 올린다거나, 레벨 조정하는 로직 가능)
+    }
+
+    // 블록을 실제 화면에 그리는 함수
+    function drawMatrix(matrix, offset) {
+      for (let y = 0; y < matrix.length; y++) {
+        for (let x = 0; x < matrix[y].length; x++) {
+          const val = matrix[y][x];
+          if (val !== 0) {
+            context.fillStyle = colors[val];
+            context.fillRect(
+              (x + offset.x) * BLOCK_SIZE,
+              (y + offset.y) * BLOCK_SIZE,
+              BLOCK_SIZE, BLOCK_SIZE
+            );
+          }
+        }
+      }
+    }
+
+    // 전체 보드 + 현재 조작 블록을 캔버스에 그리기
+    function draw() {
+      // 배경 지우기
+      context.fillStyle = '#000';
+      context.fillRect(0, 0, canvas.width, canvas.height);
+
+      // 이미 쌓인 arena(보드) 그리기
+      drawMatrix(arena, {x:0, y:0});
+
+      // 현재 조작 중인 블록 그리기
+      drawMatrix(player.matrix, player.pos);
+    }
+
+    // 시간이 지날 때마다 자동 낙하
+    function update(time = 0) {
+      const deltaTime = time - lastTime;
+      lastTime = time;
+
+      dropCounter += deltaTime;
+      if (dropCounter > dropInterval) {
+        playerDrop(); // 한 칸 낙하
+      }
+
+      draw();
+      requestAnimationFrame(update);
+    }
+
+    // 블록 아래로 이동
+    function playerDrop() {
+      player.pos.y++;
+      if (collide(arena, player)) {
+        // 충돌이면 다시 위로 되돌리고 고정(merge)
+        player.pos.y--;
+        merge(arena, player);
+        playerReset();  // 새 블록 등장
+        arenaSweep();   // 채워진 줄 제거
+      }
+      dropCounter = 0;
+    }
+
+    // 블록 좌우 이동
+    function playerMove(dir) {
+      player.pos.x += dir;
+      if (collide(arena, player)) {
+        // 충돌 시 원위치
+        player.pos.x -= dir;
+      }
+    }
+
+    // 블록을 시계 방향으로 90도 회전
+    function rotate(matrix) {
+      // 전치 후 각 행을 뒤집는 방식
+      // 예: 3x3 행렬 기준 [[a,b,c],[d,e,f],[g,h,i]] -> [[g,d,a],[h,e,b],[i,f,c]]
+      for (let y = 0; y < matrix.length; y++) {
+        for (let x = 0; x < y; x++) {
+          [matrix[x][y], matrix[y][x]] = [matrix[y][x], matrix[x][y]];
+        }
+      }
+      matrix.forEach(row => row.reverse());
+    }
+
+    // 블록 회전 (충돌 시 되돌림)
+    function playerRotate() {
+      const oldX = player.pos.x;
+      rotate(player.matrix);
+      // 회전 후 충돌 시 약간 좌우 조정 (단순 처리)
+      let shift = 1;
+      while (collide(arena, player)) {
+        player.pos.x += shift;
+        shift = -(shift + (shift > 0 ? 1 : -1));
+        if (shift > player.matrix[0].length) {
+          // 회전 불가로 판단하고 원상 복구 (추가 처리 가능)
+          rotate(player.matrix);
+          rotate(player.matrix);
+          rotate(player.matrix); // 회전 원상복귀
+          player.pos.x = oldX;
+          return;
+        }
+      }
+    }
+
+    // 새 블록 하나 랜덤으로 스폰
+    function playerReset() {
+      // 무작위로 테트리미노 선택
+      const index = Math.floor(Math.random() * TETROMINOES.length);
+      player.matrix = JSON.parse(JSON.stringify(TETROMINOES[index])); // 얕은 복사
+      player.pos.y = 0;
+      player.pos.x = (COLS / 2 | 0) - (player.matrix[0].length / 2 | 0);
+
+      // 스폰 직후 충돌 시 게임 오버 처리 가능 (여기서는 단순 arena 비우기)
+      if (collide(arena, player)) {
+        // 보드를 싹 비우고 새 게임 시작
+        for (let y = 0; y < arena.length; y++) {
+          arena[y].fill(0);
+        }
+      }
+    }
+
+    // === 키 입력 처리 ===
+    document.addEventListener('keydown', event => {
+      switch (event.key) {
+        case 'ArrowLeft':
+          playerMove(-1);
+          break;
+        case 'ArrowRight':
+          playerMove(1);
+          break;
+        case 'ArrowDown':
+          playerDrop();
+          break;
+        case 'ArrowUp':
+          playerRotate();
+          break;
+      }
+    });
+
+    // === 초기 설정 및 메인 루프 시작 ===
+    playerReset();
+    update();
+  </script>
+</body>
+</html>
